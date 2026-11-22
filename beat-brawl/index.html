@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beat Brawl</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: one wide arena (canvas) on top, transport + sensitivity + the three
+   band-to-move cards underneath. Single committed dark look: slate arena,
+   amber vs cyan fighters, band colours only on LEDs and hit sparks. */
+:root {
+  --ground: #0f1a22;
+  --floor: #13232d;
+  --panel: #16262f;
+  --line: #2a4452;
+  --ink: #e9f2f6;
+  --muted: #8fa8b6;
+  --a: #ffb23e;
+  --b: #5ad1e6;
+  --bass: #ff6b57;
+  --snare: #a98bff;
+  --hat: #6ee7b7;
+  --font-display: 'Bungee', Impact, 'Arial Black', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  padding-block: 20px 36px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 1000px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 24px; }
+h1 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: clamp(26px, 5vw, 38px); letter-spacing: .04em; line-height: 1.1; text-wrap: balance; }
+h1 span { color: var(--a); }
+h1 span + span { color: var(--b); }
+.sub { margin: 0; color: var(--muted); font-size: 13px; max-width: 62ch; min-width: 0; }
+
+.stage { position: relative; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--floor); }
+canvas { display: block; width: 100%; height: auto; }
+.overlay { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 16px; background: rgba(15, 26, 34, .62); text-align: center; }
+.overlay p { margin: 0; color: var(--ink); font-size: 13px; max-width: 40ch; }
+.overlay .row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+button, .btn {
+  font: 600 13px/1 var(--font-mono);
+  letter-spacing: .04em;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 11px 16px;
+  cursor: pointer;
+  min-height: 40px;
+}
+button:hover:not(:disabled) { border-color: var(--muted); }
+button:disabled { opacity: .4; cursor: default; }
+button.primary { background: var(--a); border-color: var(--a); color: #1b1305; }
+button.primary:hover:not(:disabled) { background: #ffc05f; border-color: #ffc05f; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--b); outline-offset: 2px; }
+
+.controls { display: grid; gap: 14px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.status { color: var(--muted); font-size: 12.5px; min-width: 0; flex: 1 1 220px; overflow-wrap: anywhere; }
+.sens { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sens label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .12em; }
+.sens input[type=range] { width: min(260px, 100%); accent-color: var(--a); }
+.sens output { min-width: 2ch; }
+
+.moves { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.move { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); min-width: 0; }
+.move .led { width: 12px; height: 12px; border-radius: 50%; background: var(--line); transition: background .08s, box-shadow .08s; }
+.move.on .led { background: var(--c); box-shadow: 0 0 14px 2px var(--c); }
+.move b { display: block; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--c); }
+.move span { display: block; color: var(--muted); font-size: 12.5px; }
+.move output { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.note { margin: 0; color: var(--muted); font-size: 12px; max-width: 80ch; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header>
+    <h1><span>Beat</span> <span>Brawl</span></h1>
+    <p class="sub">Two stickmen fight to whatever is playing. Bass throws punches, snares throw kicks, hi-hats make the other one dodge. Load a song and the fight is paced to finish exactly when it ends.</p>
+  </header>
+
+  <div class="stage" id="stageBox">
+    <canvas id="stage" aria-label="Two stickmen fighting in time with the music"></canvas>
+    <div class="overlay" id="overlay">
+      <p>Press play on the demo beat, or load a song from your device. The fight starts when the sound does.</p>
+      <div class="row">
+        <button class="primary" id="startDemo" type="button">Play demo beat</button>
+        <button id="startFile" type="button">Load a song</button>
+      </div>
+    </div>
+  </div>
+
+  <section class="controls" aria-label="Controls">
+    <div class="bar">
+      <button id="demoBtn" type="button">Demo beat</button>
+      <button id="fileBtn" type="button">Load song</button>
+      <button id="pauseBtn" type="button" disabled>Pause</button>
+      <input id="file" type="file" accept="audio/*" hidden>
+      <div class="status" id="status" aria-live="polite">Idle. Nothing is playing yet.</div>
+    </div>
+    <div class="sens">
+      <label for="sens">Sensitivity</label>
+      <input id="sens" type="range" min="1" max="10" value="5">
+      <output id="sensOut" for="sens">5</output>
+    </div>
+    <ul class="moves">
+      <li class="move" id="mBass" style="--c: var(--bass)"><i class="led"></i><div><b>Bass</b><span>Jab, cross, Flash Step dash, Rising Fist uppercut that launches</span></div><output id="nBass">0</output></li>
+      <li class="move" id="mSnare" style="--c: var(--snare)"><i class="led"></i><div><b>Snare</b><span>Kick, Meteor Kick. With a full energy bar: Blast Wave</span></div><output id="nSnare">0</output></li>
+      <li class="move" id="mHat" style="--c: var(--hat)"><i class="led"></i><div><b>Hi-hat</b><span>Hats and shakers trigger a dodge</span></div><output id="nHat">0</output></li>
+    </ul>
+    <p class="note">Songs are decoded in your browser and never uploaded. MP3, WAV, OGG and M4A work. With a loaded song, the health bars are paced to the song length: nobody can be knocked out early, and the loser goes down when the music ends. The demo beat loops, so it plays in rounds instead. Landing hits fills the energy bar. When it is full, the next snare fires a Blast Wave that cannot be dodged. Lower the sensitivity if the fight looks frantic.</p>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var cv = $('stage'), g = cv.getContext('2d');
+  var cs = getComputedStyle(document.documentElement);
+  var tok = function (n) { return cs.getPropertyValue(n).trim(); };
+  var COL = { ground: tok('--ground'), floor: tok('--floor'), line: tok('--line'), a: tok('--a'), b: tok('--b'), ink: tok('--ink'), muted: tok('--muted'), bass: tok('--bass'), snare: tok('--snare'), hat: tok('--hat') };
+  var FD = tok('--font-display'), FM = tok('--font-mono');
+  var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var W = 960, H = 540, GY = 440, K = 1;
+  function fit() {
+    var w = $('stageBox').clientWidth || 960;
+    W = w < 600 ? 640 : 960; H = 540; GY = 440;
+    cv.style.aspectRatio = W + ' / ' + H;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(w * H / W * dpr);
+    K = cv.width / W;
+  }
+  fit();
+  if (window.ResizeObserver) new ResizeObserver(fit).observe($('stageBox')); else window.addEventListener('resize', fit);
+
+  /* ---------------- poses ----------------
+     Angles are measured from "straight down" for every limb segment:
+     0 = down, PI/2 = straight ahead, PI = straight up. Positive = toward the opponent. */
+  var BASE = { lean: .12, fa: .55, fa2: 2.35, ba: .25, ba2: 2.55, fl: .5, fl2: .12, bl: -.4, bl2: -.1, crouch: 6, hipX: 0, jump: 0 };
+  function mix(a, b, t) { var o = {}; for (var k in BASE) o[k] = a[k] + (b[k] - a[k]) * t; return o; }
+  function full(p) { var o = {}; for (var k in BASE) o[k] = (p && p[k] !== undefined) ? p[k] : BASE[k]; return o; }
+  function sample(frames, p) {
+    for (var i = 1; i < frames.length; i++) {
+      if (p <= frames[i][0]) {
+        var p0 = frames[i - 1][0], p1 = frames[i][0];
+        var t = (p - p0) / (p1 - p0); t = t * t * (3 - 2 * t);
+        return mix(full(frames[i - 1][1]), full(frames[i][1]), t);
+      }
+    }
+    return full(frames[frames.length - 1][1]);
+  }
+  /* knocked out: lying flat on the back, feet toward the opponent */
+  var KOP = { lean: -1.5, fa: 1.4, fa2: 1.5, ba: 1.2, ba2: 1.4, fl: 1.45, fl2: 1.45, bl: 1.3, bl2: 1.4, crouch: 0, hipX: -30 };
+  var JAB_HOLD = { lean: .4, fa: 1.58, fa2: 1.58, hipX: 48, fl: .9, fl2: .35, crouch: 12 };
+  var CROSS_HOLD = { lean: .52, ba: 1.58, ba2: 1.58, fa: .9, fa2: 2.1, hipX: 50, fl: .95, fl2: .4, bl: -.7, bl2: -.2, crouch: 14 };
+  var KICK_HOLD = { lean: -.55, fl: 1.55, fl2: 1.55, bl: -.05, bl2: -.05, hipX: 44, crouch: 10, fa: -.6, fa2: 1.2, ba: -.8, ba2: 1.0 };
+  /* anime moves */
+  var DASH_WIND = { lean: .4, hipX: -22, fl: .9, fl2: -.15, bl: -.9, bl2: .1, fa: .3, fa2: 1.4, ba: .2, ba2: 1.3 };
+  var DASH_HOLD = { lean: .55, fa: 1.58, fa2: 1.58, ba: .5, ba2: 1.0, hipX: 60, fl: .9, fl2: -.1, bl: -1.0, bl2: .15 };
+  var UPPER_WIND = { lean: .35, fa: .2, fa2: 1.1, ba: .3, ba2: 1.3, hipX: 10, fl: 1.15, fl2: -.25, bl: -.9, bl2: .1 };
+  var UPPER_HOLD = { lean: .3, fa: 1.9, fa2: 2.8, ba: .4, ba2: 1.3, hipX: 70, jump: -26, fl: .25, fl2: .1, bl: -.5, bl2: -.2 };
+  var FLY_WIND = { lean: -.2, jump: -38, hipX: 24, fl: 1.0, fl2: .2, bl: .4, bl2: .9, fa: 1.2, fa2: 2.0 };
+  var FLY_HOLD = { lean: -.85, jump: -46, hipX: 56, fl: 1.5, fl2: 1.5, bl: .1, bl2: .5, fa: -.7, fa2: .6, ba: -.9, ba2: .4 };
+  var BEAM_CHARGE = { lean: .28, fa: -.3, fa2: -1.2, ba: -.3, ba2: -1.25, hipX: -14, fl: .9, fl2: -.1, bl: -.9, bl2: .1 };
+  var BEAM_HOLD = { lean: .3, fa: 1.5, fa2: 1.57, ba: 1.5, ba2: 1.57, hipX: 6, fl: .8, fl2: -.1, bl: -.9, bl2: .1 };
+  var ACTS = {
+    jab: { dur: .34, hitAt: .46, dmg: 4, force: 460, power: .6, frames: [[0, {}], [.28, { lean: -.1, fa: -.5, fa2: 1.1, hipX: -8, crouch: 10 }], [.46, JAB_HOLD], [.64, JAB_HOLD], [1, {}]] },
+    cross: { dur: .38, hitAt: .46, dmg: 5, force: 540, power: .75, frames: [[0, {}], [.28, { lean: -.2, ba: -.5, ba2: 1.1, hipX: -10, crouch: 12 }], [.46, CROSS_HOLD], [.66, CROSS_HOLD], [1, {}]] },
+    kick: { dur: .54, hitAt: .55, dmg: 8, force: 760, power: 1, frames: [[0, {}], [.3, { lean: -.2, fl: 1.1, fl2: -.1, bl: -.1, bl2: -.1, fa: 1.2, fa2: 2.0, ba: -.4, ba2: 1.8, hipX: 6 }], [.55, KICK_HOLD], [.72, KICK_HOLD], [1, {}]] },
+    dash: { dur: .62, hitAt: .42, dmg: 8, force: 620, power: 1, lock: .7, title: 'FLASH STEP', frames: [[0, {}], [.2, DASH_WIND], [.42, DASH_HOLD], [.7, DASH_HOLD], [1, {}]] },
+    upper: { dur: .62, hitAt: .5, dmg: 9, force: 260, power: 1.1, launch: true, lock: .75, title: 'RISING FIST', frames: [[0, {}], [.28, UPPER_WIND], [.5, UPPER_HOLD], [.72, UPPER_HOLD], [1, {}]] },
+    flyKick: { dur: .68, hitAt: .5, dmg: 10, force: 800, power: 1.2, lock: .75, title: 'METEOR KICK', frames: [[0, {}], [.26, FLY_WIND], [.5, FLY_HOLD], [.72, FLY_HOLD], [1, {}]] },
+    beam: { dur: 1.7, hitAt: .58, dmg: 22, force: 900, power: 1.8, lock: .92, unavoid: true, title: 'BLAST WAVE', frames: [[0, {}], [.3, BEAM_CHARGE], [.52, BEAM_CHARGE], [.58, BEAM_HOLD], [.9, BEAM_HOLD], [1, {}]] },
+    dodge: { dur: .38, hitAt: null, frames: [[0, {}], [.45, { jump: -42, lean: -.15, hipX: -38, fl: 1.0, fl2: -.4, bl: .6, bl2: -.5, fa: .9, fa2: 2.4, crouch: 0 }], [1, {}]] },
+    hurt: { dur: .42, hitAt: null, frames: [[0, {}], [.2, { lean: -.55, fa: 1.3, fa2: .9, ba: 1.0, ba2: .7, hipX: -26, crouch: 2, fl: .2, bl: -.7 }], [1, {}]] },
+    ko: { dur: 3, hitAt: null, frames: [[0, {}], [.07, KOP], [1, KOP]] }
+  };
+
+  /* ---------------- fighters & world state ---------------- */
+  function makeF(idx, side, color, name) {
+    return { idx: idx, side: side, face: -side, color: color, name: name, hp: 100, hpShown: 100, act: null, knock: 0, vk: 0, flash: 0, pulse: 0, phase: idx * 1.7, alt: false, altS: false, dodgeCd: 0, specCd: 0, streak: 0, combo: 0, comboT: 0, ko: false, wins: 0, x: 0, pose: full({}), dodges: 0, energy: 0, air: 0, vair: 0, spin: 0, ghostT: 0, fh: null, bh: null, headX: 0, headY: GY - 140 };
+  }
+  var F = [makeF(0, -1, COL.a, 'RIFF'), makeF(1, 1, COL.b, 'DROP')];
+  var atk = 0, state = 'fight', koT = 0, winner = 0;
+  var hitstop = 0, shake = 0, level = 0, time = 0, ts = 1;
+  var camZ = 1, speedT = 0, flashW = 0;
+  var particles = [], rings = [], texts = [], ghosts = [];
+  var counts = { bass: 0, snare: 0, hat: 0 };
+  /* match = song loaded: health is paced so the loser reaches 0 when the song ends */
+  var match = { on: false, T: 0, start: 0, loser: 1, winner: 0 };
+
+  function startAct(f, name) {
+    var d = ACTS[name];
+    f.act = { name: name, t: 0, dur: d.dur, hitAt: d.hitAt, frames: d.frames, dmg: d.dmg, force: d.force, power: d.power, hit: false, launch: !!d.launch, lock: d.lock || 0, unavoid: !!d.unavoid };
+    if (d.title) { spawnText(f.x, GY - 190, d.title, f.color, name === 'beam' ? 28 : 22); speedT = .35; }
+    if (name === 'beam') f.energy = 0;
+  }
+  function canStart(f) {
+    if (f.ko || f.air < -4) return false;
+    if (!f.act) return true;
+    var a = f.act;
+    if (a.name === 'hurt' || a.name === 'ko') return false;
+    var p = a.t / a.dur;
+    return a.lock ? p > a.lock : p > .55;
+  }
+  function setAttacker(i) { atk = i; F[i].streak = 0; }
+
+  function spawnText(x, y, txt, color, size) { texts.push({ x: x, y: y, txt: txt, color: color, size: size || 26, life: .8, max: .8 }); }
+  function spawnImpact(x, y, power, color) {
+    var n = 8 + Math.round(power * 8);
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * Math.PI * 2, s = 200 + Math.random() * 380 * power;
+      particles.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .22 + Math.random() * .2, max: .4, color: i % 3 ? '#ffffff' : color });
+    }
+    rings.push({ x: x, y: y, r: 6, life: .3, max: .3, color: color, power: power });
+  }
+  function landDust(f) {
+    for (var i = 0; i < 12; i++) {
+      var s = 90 + Math.random() * 240, dir = i % 2 ? 1 : -1;
+      particles.push({ x: f.x, y: GY + 4, vx: dir * s, vy: -Math.random() * 120, life: .3 + Math.random() * .2, max: .5, color: COL.muted });
+    }
+    rings.push({ x: f.x, y: GY + 4, r: 8, life: .35, max: .35, color: COL.muted, power: .8 });
+    shake = Math.max(shake, 7);
+  }
+
+  /* health pacing for a loaded song */
+  function elapsed() { return ctx ? Math.max(0, ctx.currentTime - match.start) : 0; }
+  function targetHp(f, t) {
+    var p = Math.min(1, t / match.T);
+    return f.idx === match.loser ? 100 * (1 - p) : 100 - 60 * p;
+  }
+  function matchDamage(def, A) {
+    var tgt = targetHp(def, elapsed()), isL = def.idx === match.loser;
+    var floor = Math.max(isL ? 2 : 26, tgt - 10);
+    var nh = Math.max(floor, Math.min(def.hp - 1, tgt - A.dmg * .25));
+    return Math.min(def.hp, nh);
+  }
+
+  function resolveHit(att, A) {
+    var def = F[1 - att.idx];
+    if (def.ko) return;
+    var da = def.act;
+    var dodging = !A.unavoid && da && da.name === 'dodge' && da.t / da.dur > .04 && da.t / da.dur < .85;
+    var heavy = A.power >= 1;
+    var ix = def.x + def.face * 16;
+    var iy = GY - (A.name === 'kick' ? 92 : A.name === 'flyKick' ? 112 : A.name === 'upper' ? 100 : 112);
+    if (dodging) {
+      spawnText(def.x, GY - 150, 'MISS', COL.muted, 22);
+      def.dodges++;
+      att.streak = 0;
+      setAttacker(def.idx);
+      return;
+    }
+    var col = A.name === 'beam' ? att.color : heavy ? COL.snare : COL.bass;
+    if (match.on) def.hp = matchDamage(def, A);
+    else def.hp = Math.max(0, def.hp - Math.round(A.dmg * (1 + level * .8)));
+    att.energy = Math.min(100, att.energy + 9 + A.power * 4);
+    def.energy = Math.min(100, def.energy + 5);
+    def.flash = .14;
+    def.vk += A.force;
+    startAct(def, 'hurt');
+    att.streak++; att.combo++; att.comboT = 1.5;
+    hitstop = .05 + A.power * .04;
+    shake = Math.max(shake, 5 + A.power * 9);
+    spawnImpact(ix, iy, A.power, col);
+    if (A.launch) { def.vair = -640; def.air = -2; def.spin = .01; }
+    if (A.name === 'beam') { flashW = 1; hitstop = .14; shake = 24; speedT = .5; }
+    else if (heavy) speedT = Math.max(speedT, .22);
+    var words = A.name === 'beam' ? ['BOOOM!'] : heavy ? ['WHAM', 'CRACK', 'BOOM'] : A.power > .7 ? ['POW', 'BAM'] : ['TAP', 'SMACK'];
+    spawnText(ix, iy - 30, words[Math.floor(Math.random() * words.length)], col, heavy ? 34 : 26);
+    if (def.hp <= 0) { knockOut(def, att); return; }
+    var lim = match.on ? (att.idx === match.winner ? 4 : 2) : 3;
+    if (att.streak >= lim) setAttacker(def.idx);
+  }
+  function knockOut(def, att) {
+    def.ko = true; def.act = null; startAct(def, 'ko');
+    def.vk += 500; def.hp = 0;
+    att.wins++; winner = att.idx;
+    state = 'ko'; koT = 0; shake = 16; hitstop = .12; flashW = Math.max(flashW, .5); speedT = .6;
+  }
+  function finishMatch() {
+    if (state !== 'fight') return;
+    knockOut(F[match.loser], F[match.winner]);
+  }
+  function resetFighters() {
+    F.forEach(function (f) {
+      f.hp = 100; f.hpShown = 100; f.ko = false; f.act = null; f.knock = 0; f.vk = 0; f.streak = 0; f.combo = 0;
+      f.energy = 0; f.air = 0; f.vair = 0; f.spin = 0; f.specCd = 0; f.dodgeCd = 0;
+    });
+    ghosts = []; state = 'fight'; camZ = 1;
+  }
+  function resetRound() { resetFighters(); atk = winner; }
+
+  /* ---------------- fight triggers ---------------- */
+  function flashLed(id) { var el = $(id); el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(function () { el.classList.remove('on'); }, 130); }
+  function bump(key, outId) { counts[key]++; $(outId).textContent = counts[key]; }
+  function pickBass(a) {
+    if (a.specCd <= 0 && Math.random() < .4) { a.specCd = 2.4; a.altS = !a.altS; return a.altS ? 'dash' : 'upper'; }
+    a.alt = !a.alt; return a.alt ? 'jab' : 'cross';
+  }
+  function pickSnare(a) {
+    if (a.energy >= 100) return 'beam';
+    if (a.specCd <= 0 && Math.random() < .4) { a.specCd = 2.4; return 'flyKick'; }
+    return 'kick';
+  }
+  function onBass() {
+    flashLed('mBass'); bump('bass', 'nBass');
+    F[0].pulse = F[1].pulse = 1;
+    if (state !== 'fight') return;
+    var a = F[atk]; if (!canStart(a)) return;
+    startAct(a, pickBass(a));
+  }
+  function onSnare() {
+    flashLed('mSnare'); bump('snare', 'nSnare');
+    if (state !== 'fight') return;
+    var a = F[atk]; if (!canStart(a)) return;
+    startAct(a, pickSnare(a));
+  }
+  function onHat() {
+    flashLed('mHat'); bump('hat', 'nHat');
+    if (state !== 'fight') return;
+    var a = F[atk], d = F[1 - atk];
+    if (d.dodgeCd > 0 || !canStart(d)) return;
+    var reading = a.act && a.act.name !== 'hurt' && a.act.name !== 'dodge' && a.act.t / a.act.dur < .35;
+    if (Math.random() < (reading ? .5 : .1)) { startAct(d, 'dodge'); d.dodgeCd = .7; }
+  }
+
+  /* ---------------- audio ---------------- */
+  var ctx = null, analyser = null, master = null, freq = null, noise = null;
+  var mode = null, bufSrc = null, demoTimer = 0, nextT = 0, step = 0, paused = false;
+  var BPM = 112;
+  function ensureCtx() {
+    if (!ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      ctx = new AC();
+      analyser = ctx.createAnalyser(); analyser.fftSize = 2048; analyser.smoothingTimeConstant = .4;
+      master = ctx.createGain(); master.gain.value = .85;
+      master.connect(analyser); analyser.connect(ctx.destination);
+      freq = new Uint8Array(analyser.frequencyBinCount);
+      noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      var d = noise.getChannelData(0); for (var i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ctx.state === 'suspended') ctx.resume();
+  }
+  function kickS(t) { var o = ctx.createOscillator(), n = ctx.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(160, t); o.frequency.exponentialRampToValueAtTime(44, t + .12); n.gain.setValueAtTime(1, t); n.gain.exponentialRampToValueAtTime(.001, t + .38); o.connect(n); n.connect(master); o.start(t); o.stop(t + .4); }
+  function snareS(t) {
+    var s = ctx.createBufferSource(); s.buffer = noise; var f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 2800; f.Q.value = .7;
+    var n = ctx.createGain(); n.gain.setValueAtTime(.8, t); n.gain.exponentialRampToValueAtTime(.001, t + .2); s.connect(f); f.connect(n); n.connect(master); s.start(t); s.stop(t + .25);
+    var o = ctx.createOscillator(), m = ctx.createGain(); o.type = 'triangle'; o.frequency.setValueAtTime(200, t); o.frequency.exponentialRampToValueAtTime(120, t + .1); m.gain.setValueAtTime(.35, t); m.gain.exponentialRampToValueAtTime(.001, t + .12); o.connect(m); m.connect(master); o.start(t); o.stop(t + .14);
+  }
+  function hatS(t, open) {
+    var s = ctx.createBufferSource(); s.buffer = noise; var f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7500;
+    var n = ctx.createGain(); var len = open ? .26 : .05; n.gain.setValueAtTime(open ? .3 : .26, t); n.gain.exponentialRampToValueAtTime(.001, t + len); s.connect(f); f.connect(n); n.connect(master); s.start(t); s.stop(t + len + .02);
+  }
+  var KICKS = { 0: 1, 6: 1, 8: 1, 14: 1, 16: 1, 22: 1, 24: 1, 26: 1, 31: 1 };
+  var SNARES = { 4: 1, 12: 1, 20: 1, 28: 1 };
+  function playStep(i, t) {
+    if (KICKS[i]) kickS(t);
+    if (SNARES[i]) snareS(t);
+    if (i % 2 === 0) hatS(t, i === 14 || i === 30);
+  }
+  function schedule() { while (nextT < ctx.currentTime + .15) { playStep(step, nextT); nextT += 60 / BPM / 4; step = (step + 1) % 32; } }
+
+  function stopAll() {
+    clearInterval(demoTimer); demoTimer = 0;
+    if (bufSrc) { bufSrc.onended = null; try { bufSrc.stop(); } catch (e) {} bufSrc = null; }
+    mode = null; paused = false; match.on = false;
+  }
+  function setStatus(s) { $('status').textContent = s; }
+  function setPlaying(on) { $('pauseBtn').disabled = !on; $('pauseBtn').textContent = 'Pause'; if (on) $('overlay').hidden = true; }
+  function fmt(t) { t = Math.max(0, Math.floor(t)); var m = Math.floor(t / 60), s = t % 60; return m + ':' + (s < 10 ? '0' : '') + s; }
+  function startDemo() {
+    stopAll(); ensureCtx(); resetFighters();
+    mode = 'demo'; step = 0; nextT = ctx.currentTime + .1;
+    demoTimer = setInterval(schedule, 25); schedule();
+    setPlaying(true); setStatus('Playing the demo beat at ' + BPM + ' BPM. Kick, snare and hat are separate, so you can see which one does what. The demo loops, so it plays in rounds.');
+  }
+  function loadFile(file) {
+    if (!file) return;
+    ensureCtx(); stopAll(); setPlaying(false);
+    setStatus('Reading ' + file.name + '…');
+    file.arrayBuffer().then(function (ab) {
+      return new Promise(function (res, rej) { ctx.decodeAudioData(ab, res, rej); });
+    }).then(function (buf) {
+      resetFighters();
+      var s = ctx.createBufferSource(); s.buffer = buf; s.connect(master);
+      s.onended = function () {
+        if (bufSrc !== s) return;
+        bufSrc = null;
+        if (match.on) finishMatch();
+        mode = null; setPlaying(false);
+        setStatus('Song finished. Load another or play the demo beat.');
+      };
+      s.start(); bufSrc = s; mode = 'file';
+      match.on = true; match.T = buf.duration; match.start = ctx.currentTime;
+      match.loser = Math.random() < .5 ? 0 : 1; match.winner = 1 - match.loser;
+      atk = match.winner;
+      setPlaying(true);
+      setStatus('Playing ' + file.name + ' (' + fmt(buf.duration) + '). Health is paced so the fight ends exactly when the song does.');
+    }).catch(function () {
+      setStatus('Could not read that file. Try an MP3, WAV, OGG or M4A.');
+    });
+  }
+  $('startDemo').addEventListener('click', startDemo);
+  $('demoBtn').addEventListener('click', startDemo);
+  $('startFile').addEventListener('click', function () { $('file').click(); });
+  $('fileBtn').addEventListener('click', function () { $('file').click(); });
+  $('file').addEventListener('change', function (e) { loadFile(e.target.files[0]); e.target.value = ''; });
+  $('pauseBtn').addEventListener('click', function () {
+    if (!ctx || !mode) return;
+    if (!paused) { ctx.suspend(); paused = true; $('pauseBtn').textContent = 'Resume'; }
+    else { ctx.resume(); paused = false; $('pauseBtn').textContent = 'Pause'; }
+  });
+  var box = $('stageBox');
+  box.addEventListener('dragover', function (e) { e.preventDefault(); });
+  box.addEventListener('drop', function (e) { e.preventDefault(); if (e.dataTransfer.files && e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+  $('sens').addEventListener('input', function () { $('sensOut').textContent = $('sens').value; });
+
+  /* ---------------- onset detection ----------------
+     The analyser returns bytes on a dB scale (-100..-30 dB). Leakage from a loud
+     kick shows up as a "beat" in every other band on that scale, so each band is
+     measured in linear amplitude instead and must clear its own noise floor.
+     A band fires when its energy jumps (spectral flux) above a floor, above its
+     recent average, and above a fraction of its own recent peak. */
+  var LIN = new Float32Array(256);
+  for (var v = 0; v < 256; v++) LIN[v] = Math.pow(10, ((v / 255) * 70 - 100) / 20);
+  var bands = {
+    bass: { lo: 30, hi: 150, refr: .16, floor: .002, prev: 0, avg: 0, peak: 0, last: -9, fn: onBass },
+    snare: { lo: 1500, hi: 5000, refr: .2, floor: .0003, prev: 0, avg: 0, peak: 0, last: -9, fn: onSnare },
+    hat: { lo: 7000, hi: 14000, refr: .09, floor: .0003, prev: 0, avg: 0, peak: 0, last: -9, fn: onHat }
+  };
+  function analyse(now) {
+    var live = ctx && analyser && ctx.state === 'running' && mode;
+    if (!live) { level *= .95; return; }
+    analyser.getByteFrequencyData(freq);
+    var hz = ctx.sampleRate / analyser.fftSize, sens = +$('sens').value, mult = 3.3 - sens * .24, fscale = 1.5 - sens * .1;
+    var total = 0, n = Math.min(freq.length, 400);
+    for (var i = 0; i < n; i++) total += freq[i];
+    level += ((total / n / 255) - level) * .1;
+    for (var key in bands) {
+      var b = bands[key], lo = Math.max(1, Math.round(b.lo / hz)), hi = Math.min(freq.length - 1, Math.round(b.hi / hz)), s = 0;
+      for (var j = lo; j <= hi; j++) s += LIN[freq[j]];
+      var m = s / (hi - lo + 1), flux = Math.max(0, m - b.prev);
+      var thr = Math.max(b.floor * fscale, b.avg * mult, b.peak * .12);
+      var fire = flux > thr && now - b.last > b.refr;
+      b.prev = m; b.avg += (flux - b.avg) * .08; b.peak = Math.max(b.peak * .9985, flux);
+      if (fire) { b.last = now; b.fn(); }
+    }
+  }
+  var spec = new Float32Array(48);
+
+  /* ---------------- update ---------------- */
+  function updateF(f, dt) {
+    f.flash = Math.max(0, f.flash - dt); f.dodgeCd = Math.max(0, f.dodgeCd - dt); f.specCd = Math.max(0, f.specCd - dt);
+    f.pulse *= Math.exp(-dt * 7);
+    if (f.comboT > 0) { f.comboT -= dt; if (f.comboT <= 0) f.combo = 0; }
+    f.hpShown += (f.hp - f.hpShown) * Math.min(1, dt * 3);
+    if (f.act) {
+      var A = f.act; A.t += dt;
+      if (!A.hit && A.hitAt !== null && A.t / A.dur >= A.hitAt) { A.hit = true; resolveHit(f, A); }
+      if (f.act && A.t >= A.dur) { if (A.name === 'ko') A.t = A.dur; else f.act = null; }
+    }
+    /* launched into the air by an uppercut: one full flip, then land */
+    if (f.air < 0 || f.vair < 0) {
+      f.vair += 1900 * dt; f.air += f.vair * dt; f.spin += 9.3 * dt;
+      if (f.air >= 0) { f.air = 0; f.vair = 0; f.spin = 0; landDust(f); }
+    }
+    var target = f.ko ? 70 : 0;
+    f.vk += ((target - f.knock) * 38 - f.vk * 9) * dt;
+    f.knock += f.vk * dt;
+    var cx = W / 2, dist = 118 + Math.sin(time * 1.3 + f.phase) * 8 - level * 14;
+    f.x = Math.max(70, Math.min(W - 70, cx + f.side * (dist / 2 + f.knock)));
+    if (f.act) f.pose = sample(f.act.frames, Math.min(1, f.act.t / f.act.dur));
+    else {
+      var p = full({});
+      p.crouch += f.pulse * 8 + Math.sin(time * 2.2 + f.phase) * 1.2;
+      p.lean += f.pulse * .07;
+      p.fa2 += f.pulse * .25;
+      p.fl += Math.sin(time * 5 + f.phase) * .1 * (.4 + level * 2);
+      p.hipX += Math.sin(time * 1.8 + f.phase) * 4;
+      f.pose = p;
+    }
+    /* afterimages while dashing or flying */
+    if (f.act && (f.act.name === 'dash' || f.act.name === 'flyKick')) {
+      f.ghostT -= dt;
+      if (f.ghostT <= 0) { f.ghostT = .035; ghosts.push({ f: f, P: f.pose, x: f.x, life: .3, max: .3 }); }
+    }
+  }
+  function update(dt, raw) {
+    F.forEach(function (f) { updateF(f, dt); });
+    ghosts = ghosts.filter(function (o) { o.life -= dt; return o.life > 0; });
+    particles = particles.filter(function (p) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .92; p.vy *= .92; return p.life > 0; });
+    rings = rings.filter(function (r) { r.life -= dt; r.r += (60 + 160 * r.power) * dt; return r.life > 0; });
+    texts = texts.filter(function (t) { t.life -= dt; t.y -= 40 * dt; return t.life > 0; });
+    shake *= Math.exp(-raw * 12);
+    speedT = Math.max(0, speedT - raw);
+    flashW *= Math.exp(-raw * 7);
+    if (state === 'ko') { koT += raw; if (koT > 3 && !match.on) resetRound(); }
+    if (match.on && state === 'fight' && mode === 'file' && ctx && elapsed() >= match.T - .03) finishMatch();
+    /* blast wave sparks on the defender */
+    F.forEach(function (f) {
+      if (f.act && f.act.name === 'beam') {
+        var p = f.act.t / f.act.dur, d = F[1 - f.idx];
+        if (p > .6 && p < .9) for (var i = 0; i < 2; i++) particles.push({ x: d.x + (Math.random() - .5) * 30, y: GY - 60 - Math.random() * 80, vx: f.face * (200 + Math.random() * 300), vy: (Math.random() - .5) * 200, life: .25, max: .25, color: i ? '#ffffff' : f.color });
+      }
+    });
+    /* camera: push in on the big moves */
+    var z = 1;
+    if (!reduced) {
+      F.forEach(function (f) {
+        if (!f.act) return;
+        var n = f.act.name, p = f.act.t / f.act.dur;
+        if (n === 'beam' && p > .15 && p < .95) z = Math.max(z, 1.2);
+        else if ((n === 'dash' || n === 'flyKick' || n === 'upper') && p > .1 && p < .9) z = Math.max(z, 1.12);
+      });
+      if (state === 'ko') z = 1.16;
+    }
+    camZ += (z - camZ) * Math.min(1, raw * 6);
+    if (analyser && mode && ctx.state === 'running') {
+      for (var i = 0; i < 48; i++) {
+        var idx = Math.floor(Math.pow(i / 48, 2) * 360) + 1;
+        spec[i] += ((freq[idx] / 255) - spec[i]) * .35;
+      }
+    } else for (var q = 0; q < 48; q++) spec[q] *= .93;
+  }
+
+  /* ---------------- draw ---------------- */
+  function ext(a1, a2) { return 42 * Math.cos(a1) + 42 * Math.cos(a2); }
+  function drawF(f, P, X, alpha, isGhost) {
+    var d = f.face;
+    var hx = X + P.hipX * d;
+    var hy = GY - Math.max(ext(P.fl, P.fl2), ext(P.bl, P.bl2)) + P.crouch + P.jump + (isGhost ? 0 : f.air);
+    var T = 58, UA = 27, LA = 27, UL = 42, LL = 42;
+    function pt(x, y, a, l) { return [x + Math.sin(a) * l * d, y + Math.cos(a) * l]; }
+    var top = [hx + Math.sin(P.lean) * T * d, hy - Math.cos(P.lean) * T];
+    var bk = pt(hx, hy, P.bl, UL), bf = pt(bk[0], bk[1], P.bl2, LL);
+    var fk = pt(hx, hy, P.fl, UL), ff = pt(fk[0], fk[1], P.fl2, LL);
+    var be = pt(top[0], top[1], P.ba, UA), bh = pt(be[0], be[1], P.ba2, LA);
+    var fe = pt(top[0], top[1], P.fa, UA), fh = pt(fe[0], fe[1], P.fa2, LA);
+    var hd = [top[0] + Math.sin(P.lean) * 19 * d, top[1] - Math.cos(P.lean) * 19];
+    var col = (!isGhost && f.flash > 0) ? '#ffffff' : f.color;
+    var spinning = !isGhost && f.spin;
+    if (spinning) { g.save(); g.translate(hx, hy - 20); g.rotate(-f.spin * d); g.translate(-hx, -(hy - 20)); }
+    g.lineWidth = 7; g.lineCap = 'round'; g.lineJoin = 'round'; g.strokeStyle = col; g.fillStyle = col;
+    function poly(a, b, c) { g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); if (c) g.lineTo(c[0], c[1]); g.stroke(); }
+    function fist(p) { g.beginPath(); g.arc(p[0], p[1], 5.5, 0, 6.2832); g.fill(); }
+    g.globalAlpha = alpha * .5; poly([hx, hy], bk, bf); poly(top, be, bh); fist(bh);
+    g.globalAlpha = alpha;
+    poly([hx, hy], top);
+    poly([hx, hy], fk, ff);
+    g.beginPath(); g.arc(hd[0], hd[1], 15, 0, 6.2832); g.fillStyle = COL.ground; g.fill(); g.stroke();
+    g.fillStyle = col; poly(top, fe, fh); fist(fh);
+    if (spinning) g.restore();
+    g.globalAlpha = 1;
+    if (!isGhost) { f.fh = fh; f.bh = bh; f.headX = hd[0]; f.headY = hd[1]; }
+  }
+  function drawBeam(a) {
+    var A = a.act;
+    if (!A || A.name !== 'beam' || !a.fh || !a.bh) return;
+    var p = A.t / A.dur, d = a.face;
+    if (p > .1 && p < .6) {
+      var k = Math.min(1, (p - .1) / .45);
+      var ox = (a.fh[0] + a.bh[0]) / 2, oy = (a.fh[1] + a.bh[1]) / 2, r = 6 + 26 * k + Math.sin(time * 40) * 2;
+      var gr = g.createRadialGradient(ox, oy, 1, ox, oy, r * 2);
+      gr.addColorStop(0, '#ffffff'); gr.addColorStop(.35, a.color); gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(ox, oy, r * 2, 0, 6.2832); g.fill();
+    }
+    if (p >= .58 && p < .93) {
+      var env = p < .66 ? (p - .58) / .08 : p > .85 ? (.93 - p) / .08 : 1;
+      env = Math.max(0, Math.min(1, env));
+      var w = (50 + Math.sin(time * 60) * 5) * env, x1 = a.fh[0], y = a.fh[1], x2 = d > 0 ? W + 60 : -60;
+      g.lineCap = 'round';
+      g.strokeStyle = a.color; g.globalAlpha = .3; g.lineWidth = w * 1.9; g.beginPath(); g.moveTo(x1, y); g.lineTo(x2, y); g.stroke();
+      g.globalAlpha = .85; g.lineWidth = w; g.beginPath(); g.moveTo(x1, y); g.lineTo(x2, y); g.stroke();
+      g.globalAlpha = 1; g.strokeStyle = '#ffffff'; g.lineWidth = w * .45; g.beginPath(); g.moveTo(x1, y); g.lineTo(x2, y); g.stroke();
+      g.fillStyle = '#ffffff'; g.globalAlpha = .9; g.beginPath(); g.arc(x1, y, w * .7, 0, 6.2832); g.fill(); g.globalAlpha = 1;
+    }
+  }
+  function drawSpeedLines(cx, cy) {
+    if (speedT <= 0 || reduced) return;
+    var a = Math.min(1, speedT / .3) * .4;
+    g.strokeStyle = '#ffffff'; g.lineWidth = 2; g.globalAlpha = a;
+    for (var i = 0; i < 34; i++) {
+      var ang = Math.random() * 6.2832, r1 = 130 + Math.random() * 90, r2 = r1 + 140 + Math.random() * 260;
+      g.beginPath(); g.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1); g.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2); g.stroke();
+    }
+    g.globalAlpha = 1;
+  }
+  function drawBg() {
+    var gr = g.createLinearGradient(0, 0, 0, GY);
+    gr.addColorStop(0, COL.ground); gr.addColorStop(1, '#1a3140');
+    g.fillStyle = gr; g.fillRect(-W, -H, W * 3, GY + H);
+    var bw = W / 48;
+    for (var i = 0; i < 48; i++) {
+      var h = spec[i] * 230 + 4;
+      g.globalAlpha = .14 + spec[i] * .12;
+      g.fillStyle = i < 24 ? COL.a : COL.b;
+      g.fillRect(i * bw + 2, GY - h, bw - 4, h);
+      g.globalAlpha = .05; g.fillRect(i * bw + 2, GY + 2, bw - 4, Math.min(h * .35, H - GY - 4));
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = COL.floor; g.globalAlpha = .88; g.fillRect(-W, GY, W * 3, H - GY + H); g.globalAlpha = 1;
+    g.strokeStyle = COL.line; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(-W, GY); g.lineTo(W * 2, GY); g.stroke();
+    g.lineWidth = 1; g.globalAlpha = .5;
+    for (var r = 1; r <= 3; r++) { var y = GY + r * r * 8; g.beginPath(); g.moveTo(-W, y); g.lineTo(W * 2, y); g.stroke(); }
+    g.globalAlpha = 1;
+  }
+  function drawHUD() {
+    var bw = W / 2 - 60, y = 40, h = 14;
+    F.forEach(function (f) {
+      var left = f.side < 0, x0 = left ? 24 : W - 24 - bw;
+      g.fillStyle = COL.line; g.fillRect(x0, y, bw, h);
+      var wTrail = bw * f.hpShown / 100, wNow = bw * f.hp / 100;
+      g.fillStyle = 'rgba(255,255,255,.45)';
+      g.fillRect(left ? x0 : x0 + bw - wTrail, y, wTrail, h);
+      g.fillStyle = f.color;
+      g.fillRect(left ? x0 : x0 + bw - wNow, y, wNow, h);
+      g.font = '600 13px ' + FM; g.textBaseline = 'alphabetic';
+      g.fillStyle = COL.ink; g.textAlign = left ? 'left' : 'right';
+      g.fillText(f.name, left ? x0 : x0 + bw, y - 8);
+      g.fillStyle = COL.muted; g.textAlign = left ? 'right' : 'left';
+      g.fillText('WINS ' + f.wins, left ? x0 + bw : x0, y - 8);
+      /* energy bar */
+      var en = f.energy / 100, ey = y + h + 6, enW = bw * en;
+      g.fillStyle = COL.line; g.fillRect(x0, ey, bw, 5);
+      g.fillStyle = (en >= 1 && Math.sin(time * 14) > 0) ? '#ffffff' : f.color;
+      g.fillRect(left ? x0 : x0 + bw - enW, ey, enW, 5);
+      if (en >= 1) {
+        g.font = '600 11px ' + FM; g.textAlign = left ? 'left' : 'right'; g.fillStyle = f.color;
+        g.fillText('BLAST READY', left ? x0 : x0 + bw, ey + 22);
+      }
+      if (f.combo >= 2) {
+        g.textAlign = 'center'; g.font = '400 18px ' + FD; g.fillStyle = f.color;
+        g.fillText('COMBO x' + f.combo, f.x, Math.max(24, f.headY - 40));
+      }
+    });
+    /* clock */
+    g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+    if (match.on) {
+      var el = Math.min(match.T, elapsed());
+      g.font = '500 10px ' + FM; g.fillStyle = COL.muted; g.fillText('LEFT', W / 2, y - 8);
+      g.font = '600 17px ' + FM; g.fillStyle = COL.ink; g.fillText(fmt(Math.ceil(match.T - el)), W / 2, y + 12);
+      var bx = 24, bwid = W - 48, by = H - 22;
+      g.fillStyle = COL.line; g.fillRect(bx, by, bwid, 4);
+      g.globalAlpha = .85; g.fillStyle = COL.ink; g.fillRect(bx, by, bwid * Math.min(1, el / match.T), 4); g.globalAlpha = 1;
+      g.font = '500 11px ' + FM; g.fillStyle = COL.muted;
+      g.textAlign = 'left'; g.fillText(fmt(el), bx, by - 8);
+      g.textAlign = 'right'; g.fillText(fmt(match.T), bx + bwid, by - 8);
+    } else {
+      g.font = '600 12px ' + FM; g.fillStyle = COL.muted; g.fillText('DEMO', W / 2, y + 11);
+    }
+    if (state === 'ko') {
+      var k = Math.min(1, koT / .25), sc = 1.4 - .4 * k;
+      var fade = match.on ? Math.max(0, Math.min(1, 1 - (koT - 4) / 1.5)) : 1;
+      g.save(); g.translate(W / 2, H * .36); g.scale(sc, sc); g.globalAlpha = k * fade;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = '400 92px ' + FD; g.lineWidth = 8; g.strokeStyle = COL.ground; g.strokeText('K.O.', 0, 0);
+      g.fillStyle = F[winner].color; g.fillText('K.O.', 0, 0);
+      g.font = '600 15px ' + FM; g.fillStyle = COL.ink; g.fillText(F[winner].name + (match.on ? ' WINS WHEN THE MUSIC STOPS' : ' WINS THE ROUND'), 0, 62);
+      g.restore();
+    }
+  }
+  function draw() {
+    g.setTransform(K, 0, 0, K, 0, 0);
+    g.clearRect(0, 0, W, H);
+    var sx = 0, sy = 0;
+    if (shake > .3 && !reduced) { sx = (Math.random() - .5) * shake; sy = (Math.random() - .5) * shake; }
+    g.save(); g.translate(sx, sy);
+    var mx = (F[0].x + F[1].x) / 2, cy = GY - 90;
+    g.translate(mx, cy); g.scale(camZ, camZ); g.translate(-mx, -cy);
+    drawBg();
+    drawSpeedLines(mx, cy);
+    F.forEach(function (f) {
+      var jump = (f.pose ? f.pose.jump : 0) + f.air;
+      g.fillStyle = 'rgba(0,0,0,.35)'; g.beginPath();
+      g.ellipse(f.x, GY + 6, Math.max(14, 36 + jump * .35), 7, 0, 0, 6.2832); g.fill();
+    });
+    ghosts.forEach(function (o) { drawF(o.f, o.P, o.x, o.life / o.max * .4, true); });
+    var order = atk === 0 ? [F[1], F[0]] : [F[0], F[1]];
+    order.forEach(function (f) { drawF(f, f.pose, f.x, 1, false); });
+    F.forEach(drawBeam);
+    rings.forEach(function (r) { g.globalAlpha = r.life / r.max; g.strokeStyle = r.color; g.lineWidth = 3; g.beginPath(); g.arc(r.x, r.y, r.r, 0, 6.2832); g.stroke(); });
+    particles.forEach(function (p) { g.globalAlpha = Math.min(1, p.life / p.max * 1.5); g.strokeStyle = p.color; g.lineWidth = 3; g.beginPath(); g.moveTo(p.x, p.y); g.lineTo(p.x - p.vx * .035, p.y - p.vy * .035); g.stroke(); });
+    g.globalAlpha = 1;
+    texts.forEach(function (t) { g.globalAlpha = Math.min(1, t.life / t.max * 1.6); g.font = '400 ' + t.size + 'px ' + FD; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = 5; g.strokeStyle = COL.ground; g.strokeText(t.txt, t.x, t.y); g.fillStyle = t.color; g.fillText(t.txt, t.x, t.y); });
+    g.globalAlpha = 1;
+    g.restore();
+    if (flashW > .02 && !reduced) { g.globalAlpha = Math.min(.7, flashW * .7); g.fillStyle = '#ffffff'; g.fillRect(0, 0, W, H); g.globalAlpha = 1; }
+    drawHUD();
+  }
+
+  /* ---------------- loop ---------------- */
+  var last = performance.now();
+  function frame(now) {
+    var raw = Math.min(.05, (now - last) / 1000); last = now;
+    analyse(now / 1000);
+    var target = 1;
+    if (hitstop > 0) { target = .12; hitstop -= raw; }
+    if (state === 'ko' && koT < 1.3 && !reduced) target = .3;
+    ts += (target - ts) * Math.min(1, raw * 18);
+    var dt = raw * ts; time += dt;
+    update(dt, raw); draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
